@@ -3,6 +3,10 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .PHONY: run build test fuzz lint docker docker-push kind-demo kind-delete helm-lint
 
+# A bare `make` must build, not launch the server: CodeQL's Go autobuilder and
+# other tooling run `make` with no target and would otherwise hang on `run`.
+.DEFAULT_GOAL := build
+
 run: ## run locally with traffic on, hitting itself
 	LOADGEN_ENABLED=true LOG_FORMAT=text go run ./cmd/canarybird
 
