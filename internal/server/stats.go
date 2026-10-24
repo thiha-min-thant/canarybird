@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,8 +75,8 @@ func (s *Stats) SetExpected(raw string) {
 			continue
 		}
 		f, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(v), "%"), 64)
-		if err != nil {
-			continue
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			continue // "v1=nan" would otherwise poison the stats JSON (NaN is not encodable)
 		}
 		exp[strings.TrimSpace(k)] = f
 	}

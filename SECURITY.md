@@ -41,6 +41,27 @@ What the project does to keep the blast radius small:
   capabilities dropped, `RuntimeDefault` seccomp, no service-account token.
 - Base images pinned by digest; GitHub Actions pinned by commit SHA; CI runs
   `govulncheck`, CodeQL and OpenSSF Scorecard; Dependabot keeps pins current.
-- Release images carry SLSA provenance and an SBOM attestation.
+- Release images carry SLSA provenance and an SBOM attestation; release
+  binaries ship with a `checksums.txt` signed keylessly through Sigstore.
 - All runtime inputs are clamped (`internal/chaos/chaos.go`): memory hold is
   capped at 4 GiB, CPU burn at 5 s, latency and jitter at 30 s.
+
+## Verifying a release
+
+Every GitHub release carries `checksums.txt` and `checksums.txt.sigstore.json`,
+a keyless [Sigstore](https://www.sigstore.dev/) bundle produced by the
+`release.yml` workflow. Verifying the checksum file verifies every archive:
+
+```bash
+TAG=v0.1.0
+gh release download "$TAG" -R thiha-min-thant/canarybird \
+  -p checksums.txt -p checksums.txt.sigstore.json -p "canarybird_*_$(uname -s | tr A-Z a-z)_*"
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/thiha-min-thant/canarybird/.github/workflows/release.yml@refs/tags/$TAG"
+sha256sum --ignore-missing -c checksums.txt
+```
+
+The container image's provenance and SBOM can be inspected with
+`docker buildx imagetools inspect ghcr.io/thiha-min-thant/canarybird:$TAG --format '{{ json .Provenance }}'`.

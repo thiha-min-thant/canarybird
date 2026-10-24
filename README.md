@@ -130,8 +130,13 @@ curl -X PUT -H 'Accept: application/json' -d 'scenario=error-spike&target_versio
 ```bash
 make run          # local, traffic hits itself
 make test
+make fuzz         # Go native fuzz targets for every input parser
 make kind-demo    # 3×v1 + 1×v2 on kind with a locally built image
 ```
+
+Standalone binaries for Linux, macOS and Windows are attached to each
+[GitHub release](https://github.com/thiha-min-thant/canarybird/releases), with a
+Sigstore-signed `checksums.txt` ([how to verify](SECURITY.md#verifying-a-release)).
 
 ## Security
 
@@ -139,8 +144,9 @@ canarybird is a test harness with **no authentication**: anyone who can reach
 port 8080 can break the pods. Keep it off the internet, reach the UI with
 `kubectl port-forward` or behind an authenticating ingress, and ideally fence
 it with a `NetworkPolicy`. Images are distroless, non-root, read-only, pinned by
-digest, and shipped with SLSA provenance and an SBOM. Report vulnerabilities
-privately via [SECURITY.md](SECURITY.md).
+digest, and shipped with SLSA provenance and an SBOM; release binaries are
+signed through Sigstore. Report vulnerabilities privately via
+[SECURITY.md](SECURITY.md).
 
 ## Roadmap
 

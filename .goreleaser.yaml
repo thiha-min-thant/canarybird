@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Release binaries are built here; the container image and Helm chart are
+# pushed by separate jobs in .github/workflows/release.yml.
+version: 2
+project_name: canarybird
+
+builds:
+  - id: canarybird
+    main: ./cmd/canarybird
+    binary: canarybird
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.build={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md, SECURITY.md]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless (Sigstore) signature over the checksum file. Verifying it verifies
+# every archive. See SECURITY.md for the cosign verify-blob command.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --yes
+      - --bundle=${signature}
+      - ${artifact}
+
+changelog:
+  use: github-native
+
+release:
+  footer: |
+    ## Container image
+
+    ```
+    ghcr.io/thiha-min-thant/canarybird:{{ .Version }}
+    ```
+
+    Images carry SLSA provenance and an SBOM attestation (BuildKit). The Helm
+    chart is at `oci://ghcr.io/thiha-min-thant/charts/canarybird`.
+
+    ## Verify the binaries
+
+    `checksums.txt` is signed keylessly with Sigstore; see
+    [SECURITY.md](https://github.com/thiha-min-thant/canarybird/blob/main/SECURITY.md#verifying-a-release).

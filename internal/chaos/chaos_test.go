@@ -54,3 +54,46 @@ func TestScenarioNamesStable(t *testing.T) {
 		t.Fatalf("names %v", names)
 	}
 }
+
+// FuzzClamp checks that any Settings a client can send is forced into the
+// documented bounds and that clamping is idempotent.
+func FuzzClamp(f *testing.F) {
+	f.Add("flaky", 0.10, 500, 0, 300, 0, 0, 0, true)
+	f.Add("", 7.0, 42, -5, -1, 99_999, 1<<20, -3, false)
+	f.Add("custom", -0.5, 599, 30_001, 30_001, 5_001, 4_097, 1, true)
+	f.Fuzz(func(t *testing.T, scenario string, errRate float64, status, latency, jitter, cpu, mem, panicEvery int, ready bool) {
+		in := Settings{
+			Scenario: scenario, ErrorRate: errRate, ErrorStatus: status,
+			LatencyMs: latency, JitterMs: jitter, CPUBurnMs: cpu, MemHoldMB: mem,
+			Ready: ready, PanicEvery: panicEvery,
+		}
+		got := clamp(in)
+		if !(got.ErrorRate >= 0 && got.ErrorRate <= 1) { // also rejects NaN
+			t.Fatalf("error rate %v out of [0,1] for input %v", got.ErrorRate, errRate)
+		}
+		if got.ErrorStatus < 400 || got.ErrorStatus > 599 {
+			t.Fatalf("error status %d outside 4xx/5xx", got.ErrorStatus)
+		}
+		if got.LatencyMs < 0 || got.LatencyMs > 30_000 || got.JitterMs < 0 || got.JitterMs > 30_000 {
+			t.Fatalf("latency %d / jitter %d outside [0,30000]", got.LatencyMs, got.JitterMs)
+		}
+		if got.CPUBurnMs < 0 || got.CPUBurnMs > 5_000 {
+			t.Fatalf("cpu burn %d outside [0,5000]", got.CPUBurnMs)
+		}
+		if got.MemHoldMB < 0 || got.MemHoldMB > 4_096 {
+			t.Fatalf("mem hold %d outside [0,4096]", got.MemHoldMB)
+		}
+		if got.PanicEvery < 0 {
+			t.Fatalf("panic every %d negative", got.PanicEvery)
+		}
+		if got.Scenario == "" {
+			t.Fatal("scenario must never be empty after clamp")
+		}
+		if got.Ready != ready {
+			t.Fatal("clamp must not touch Ready")
+		}
+		if again := clamp(got); again != got {
+			t.Fatalf("clamp not idempotent: %+v then %+v", got, again)
+		}
+	})
+}

@@ -10,7 +10,12 @@ make test   # go vet + go test
 make helm-lint
 ```
 
-CI additionally runs `go test -race`, `govulncheck`, CodeQL and a Docker build.
+CI additionally runs `go test -race`, `make fuzz` (every `Fuzz*` target for
+30 s), `govulncheck`, CodeQL and a Docker build. Input parsers get a Go native
+fuzz test next to their unit tests; `make fuzz FUZZTIME=1m` runs them longer.
+
+`main` only takes changes through a pull request with green checks (a
+repository ruleset enforces this); push a branch and open a PR.
 Keep the standard-library-only rule: new Go dependencies need a very good
 reason, stated in the PR.
 

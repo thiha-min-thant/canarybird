@@ -1,7 +1,7 @@
 IMAGE   ?= ghcr.io/thiha-min-thant/canarybird
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: run build test lint docker docker-push kind-demo kind-delete helm-lint
+.PHONY: run build test fuzz lint docker docker-push kind-demo kind-delete helm-lint
 
 run: ## run locally with traffic on, hitting itself
 	LOADGEN_ENABLED=true LOG_FORMAT=text go run ./cmd/canarybird
@@ -11,6 +11,14 @@ build:
 
 test:
 	go vet ./... && go test ./...
+
+FUZZTIME ?= 10s
+fuzz: ## run every Fuzz* target for $(FUZZTIME) each (seed corpora already run under `make test`)
+	@set -e; for pkg in $$(go list ./...); do \
+	  for fn in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz' || true); do \
+	    echo "== $$pkg $$fn"; go test $$pkg -run='^$$' -fuzz="^$$fn\$$" -fuzztime=$(FUZZTIME); \
+	  done; \
+	done
 
 lint:
 	gofmt -l . && test -z "$$(gofmt -l .)"

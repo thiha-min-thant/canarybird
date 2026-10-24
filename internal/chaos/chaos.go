@@ -5,6 +5,7 @@ package chaos
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"sync"
@@ -100,6 +101,9 @@ func (c *Controller) Set(s Settings) Settings {
 }
 
 func clamp(s Settings) Settings {
+	if math.IsNaN(s.ErrorRate) {
+		s.ErrorRate = 0 // min/max propagate NaN; "error_rate=nan" would otherwise break JSON encoding
+	}
 	s.ErrorRate = min(max(s.ErrorRate, 0), 1)
 	if s.ErrorStatus < 400 || s.ErrorStatus > 599 {
 		s.ErrorStatus = 500
