@@ -1,0 +1,36 @@
+# Gate on the server-side success rate and p95 of the version under test.
+# Both metrics come straight from canarybird's /metrics, so this works with
+# any (or no) service mesh.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canarybird-success-rate
+spec:
+  args:
+    - name: version
+    - name: prometheus
+      value: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+  metrics:
+    - name: success-rate
+      interval: 20s
+      count: 3
+      successCondition: result[0] >= 0.95
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: "{{args.prometheus}}"
+          query: |
+            sum(rate(canarybird_http_requests_total{version="{{args.version}}",status!~"5.."}[1m]))
+            /
+            sum(rate(canarybird_http_requests_total{version="{{args.version}}"}[1m]))
+    - name: p95-latency
+      interval: 20s
+      count: 3
+      successCondition: result[0] <= 0.5
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: "{{args.prometheus}}"
+          query: |
+            histogram_quantile(0.95,
+              sum(rate(canarybird_http_request_duration_seconds_bucket{version="{{args.version}}"}[1m])) by (le))

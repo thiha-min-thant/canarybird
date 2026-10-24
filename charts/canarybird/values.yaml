@@ -1,0 +1,86 @@
+# Default values for canarybird.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/thiha-min-thant/canarybird
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# What this release answers as. Change version (and colour) to make a new
+# rollout distinguishable on the grid — no image rebuild needed.
+version: v1
+color: ""            # palette name (blue, green, yellow, purple, orange, pink, teal, white), any CSS colour, or "" to derive from version
+
+loadgen:
+  enabled: true
+  rps: 20
+  keepalive: false
+  target: ""         # defaults to http://<release>.<namespace>.svc:<port> so traffic crosses the real split
+
+# Fan /control out to every pod via the headless Service, so "apply to v2 only"
+# reaches every v2 pod rather than whichever one served the page.
+controlPeers: true
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+extraEnv: []
+#  - name: ZONE
+#    value: ap-southeast-1a
+#  - name: LOG_LEVEL
+#    value: debug
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 512Mi    # memory-leak preset holds 256Mi; drag the slider past the limit to see an OOMKill
+
+probes:
+  readiness:
+    initialDelaySeconds: 1
+    periodSeconds: 3
+    failureThreshold: 2
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+terminationGracePeriodSeconds: 15
+
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  labels: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+# Pod-level: satisfies the "restricted" Pod Security Standard.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+# Container-level.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+# The app never talks to the Kubernetes API; don't mount a token.
+automountServiceAccountToken: false

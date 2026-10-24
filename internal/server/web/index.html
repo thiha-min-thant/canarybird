@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>canarybird · {{.Identity.Version}} · {{.Identity.Pod}}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23F5C842'/%3E%3Ccircle cx='21' cy='13' r='2' fill='%231B2230'/%3E%3Cpath d='M26 16 l5 2 -5 2z' fill='%23FF8A3D'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/vendor/htmx.min.js" defer></script>
+<script src="/static/vendor/htmx-ext-sse.min.js" defer></script>
+<script src="/static/grid.js" defer></script>
+</head>
+<body hx-ext="sse" sse-connect="/events">
+
+<header class="top">
+  <a class="brand" href="/" aria-label="canarybird home">
+    <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="#F5C842"/><circle cx="21" cy="13" r="2" fill="#1B2230"/><path d="M26 16l5 2-5 2z" fill="#FF8A3D"/><path d="M8 20c3 2 6 2 9 0" stroke="#1B2230" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+    <span>canarybird</span>
+  </a>
+  <ul class="identity" aria-label="Pod identity">
+    <li><i class="swatch" style="background:{{.Identity.Color}}"></i>{{.Identity.Version}}</li>
+    <li title="pod">{{.Identity.Pod}}</li>
+    {{if .Identity.Node}}<li title="node">{{.Identity.Node}}</li>{{end}}
+    {{if .Identity.Zone}}<li title="zone">{{.Identity.Zone}}</li>{{end}}
+  </ul>
+  <span class="live" id="live" data-state="connecting"><i></i><span>connecting</span></span>
+</header>
+
+<main class="layout">
+  <section class="stage" aria-label="Live traffic">
+    <div class="stage-head">
+      <h1>Who answers each request</h1>
+      <p class="hint">Each square is one request from this pod's load generator to the Service. Colour is the version that answered; a slash is a 5xx or connection error; a faded square took over 500&nbsp;ms.</p>
+    </div>
+    <div class="canvas-wrap"><canvas id="grid" role="img" aria-label="Grid of recent requests coloured by version"></canvas></div>
+    <div id="legend" class="legend" aria-live="off"></div>
+
+    <div id="stats" class="stats" sse-swap="stats">{{template "stats" .Stats}}</div>
+  </section>
+
+  <aside class="side">
+    <section class="panel" aria-labelledby="traffic-h">
+      <h2 id="traffic-h">Traffic</h2>
+      <div id="loadgen">{{template "loadgen" .Loadgen}}</div>
+    </section>
+    <section class="panel" aria-labelledby="control-h">
+      <h2 id="control-h">Break something</h2>
+      <div id="control" sse-swap="control">{{template "control" .Control}}</div>
+    </section>
+    <footer class="foot">
+      <a href="/metrics">/metrics</a> · <a href="/api/state">/api/state</a> · <a href="/readyz">/readyz</a>
+      <span>build {{.Build}}</span>
+    </footer>
+  </aside>
+</main>
+
+</body>
+</html>

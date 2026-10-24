@@ -1,0 +1,13 @@
+apiVersion: v2
+name: canarybird
+description: A canary-deployment test harness with a live traffic grid, runtime chaos controls and Prometheus metrics. One image, behaviour by environment and at runtime.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/thiha-min-thant/canarybird
+sources:
+  - https://github.com/thiha-min-thant/canarybird
+keywords: [canary, progressive-delivery, argo-rollouts, flagger, chaos, demo]
+maintainers:
+  - name: Thiha Min Thant
+    url: https://github.com/thiha-min-thant

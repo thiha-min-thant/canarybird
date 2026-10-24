@@ -1,0 +1,13 @@
+canarybird {{ .Values.version }} is rolling out as {{ include "canarybird.fullname" . }} in {{ .Release.Namespace }}.
+
+Open the grid:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "canarybird.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+
+Ship a "new version" without building anything:
+
+  helm upgrade {{ .Release.Name }} charts/canarybird --reuse-values --set version=v2 --set color=green
+
+Then break only the new version from the panel ("Apply to: v2 only" → error-spike)
+and watch your rollout controller react.

@@ -1,0 +1,89 @@
+# Argo Rollouts canary with automated analysis on canarybird's own metrics.
+#
+# Prereqs: Argo Rollouts, Prometheus scraping pods (the pod annotations below
+# work with the stock kube-prometheus-stack additionalScrapeConfigs or any
+# annotation-based scraper), and a traffic router if you want real weights
+# (without one, Argo uses replica ratios, which the grid still shows).
+#
+#   kubectl apply -f examples/argo-rollouts/
+#   kubectl port-forward svc/canarybird 8080:80
+#
+# Trigger a rollout by changing BOTH the version env and the analysis arg:
+#   kubectl argo rollouts set image canarybird canarybird=ghcr.io/thiha-min-thant/canarybird:latest  # or edit VERSION below
+# then in the UI: "Apply to: v2 only" → error-spike → analysis fails → auto rollback.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canarybird
+spec:
+  selector: { app: canarybird }
+  ports: [{ name: http, port: 80, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canarybird-headless
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: { app: canarybird }
+  ports: [{ name: http, port: 8080 }]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: canarybird
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: canarybird }
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0
+      steps:
+        - setWeight: 10
+        - pause: { duration: 60s }
+        - analysis:
+            templates: [{ templateName: canarybird-success-rate }]
+            args: [{ name: version, value: v2 }]   # keep in sync with VERSION below
+        - setWeight: 50
+        - pause: { duration: 60s }
+        - analysis:
+            templates: [{ templateName: canarybird-success-rate }]
+            args: [{ name: version, value: v2 }]
+        - setWeight: 100
+  template:
+    metadata:
+      labels: { app: canarybird }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: canarybird
+          image: ghcr.io/thiha-min-thant/canarybird:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: VERSION, value: v1 }     # change to v2 (and COLOR) to start a rollout
+            - { name: COLOR, value: blue }
+            - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+            - { name: LOADGEN_ENABLED, value: "true" }
+            - { name: LOADGEN_RPS, value: "30" }
+            - { name: LOADGEN_TARGET, value: http://canarybird }
+            - { name: CONTROL_PEERS, value: canarybird-headless }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 3, failureThreshold: 2 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 512Mi } }

@@ -1,0 +1,10 @@
+.git
+.github
+bin
+dist
+charts
+examples
+docs
+hack
+*.md
+.claude

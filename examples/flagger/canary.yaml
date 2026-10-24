@@ -1,0 +1,49 @@
+# Flagger canary. Flagger's built-in request-success-rate comes from the mesh
+# or ingress you use; the MetricTemplate below adds canarybird's own view so
+# the gate works even on plain kube-proxy routing.
+#
+#   helm install canarybird charts/canarybird --set controlPeers=true
+#   kubectl apply -f examples/flagger/canary.yaml
+#   helm upgrade canarybird charts/canarybird --reuse-values --set version=v2 --set color=green
+#   → then "Apply to: v2 only" → error-spike and watch Flagger halt and roll back.
+---
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: canarybird-success-rate
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+  query: |
+    100 * sum(rate(canarybird_http_requests_total{namespace="{{ namespace }}",pod=~"{{ target }}-[0-9a-zA-Z]+-[0-9a-zA-Z]+",status!~"5.."}[{{ interval }}]))
+    /
+    sum(rate(canarybird_http_requests_total{namespace="{{ namespace }}",pod=~"{{ target }}-[0-9a-zA-Z]+-[0-9a-zA-Z]+"}[{{ interval }}]))
+---
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: canarybird
+spec:
+  provider: kubernetes        # swap for istio / linkerd / nginx / gatewayapi as you have it
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: canarybird
+  progressDeadlineSeconds: 300
+  service:
+    port: 80
+    targetPort: 8080
+  analysis:
+    interval: 30s
+    threshold: 3
+    maxWeight: 50
+    stepWeight: 10
+    metrics:
+      - name: canarybird-success-rate
+        templateRef:
+          name: canarybird-success-rate
+        thresholdRange:
+          min: 95
+        interval: 1m
+    # canarybird generates its own traffic, so no Flagger loadtester webhook is needed.

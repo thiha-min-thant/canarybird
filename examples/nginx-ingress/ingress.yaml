@@ -1,0 +1,35 @@
+# ingress-nginx canary annotations: 10% of requests to v2 by weight.
+# Deploy examples/quickstart.yaml first (or the per-version Services from
+# examples/gateway-api/httproute.yaml), then set LOADGEN_TARGET / the Traffic
+# panel to the Ingress hostname so requests go through nginx's split.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canarybird
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: canarybird.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: canarybird-v1, port: { number: 80 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canarybird-canary
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: canarybird.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: canarybird-v2, port: { number: 80 } } }

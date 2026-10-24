@@ -1,0 +1,115 @@
+{{/* ---------- stats: observed split per version ---------- */}}
+{{define "stats"}}
+{{if .Rows}}
+<table class="split" aria-label="Observed traffic split">
+  <thead>
+    <tr><th>Version</th><th class="num">Observed</th><th class="num">Expected</th><th class="num">Errors</th><th class="num">p50</th><th class="num">p95</th><th class="num">Pods</th></tr>
+  </thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td class="ver"><i class="swatch" style="background:{{.Color}}"></i>{{.Version}}</td>
+      <td class="num bar">
+        <span class="bar-track"><span class="bar-fill" style="width:{{pct .Share}}%;background:{{.Color}}"></span>{{if ge .Expected 0.0}}<span class="bar-mark" style="left:{{pct .Expected}}%"></span>{{end}}</span>
+        <b>{{pct .Share}}%</b>
+      </td>
+      <td class="num">{{if ge .Expected 0.0}}{{pct .Expected}}% <small class="{{if gt (abs .Delta) 5.0}}warn{{end}}">{{signed .Delta}}</small>{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="num {{if gt .ErrorRate 0.0}}warn{{end}}">{{pct .ErrorRate}}%</td>
+      <td class="num">{{ms .P50Ms}} ms</td>
+      <td class="num">{{ms .P95Ms}} ms</td>
+      <td class="num">{{.Pods}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<p class="window">Last {{.Total}} requests over {{pct .WindowSecs}} s
+  <button class="link" hx-post="/stats/reset" hx-target="#stats" hx-swap="innerHTML">reset window</button></p>
+{{else}}
+<p class="empty">{{if .Enabled}}Waiting for the first responses…{{else}}Traffic is off. Start it in the Traffic panel and the split appears here.{{end}}</p>
+{{end}}
+{{end}}
+
+{{/* ---------- loadgen: the Traffic panel ---------- */}}
+{{define "loadgen"}}
+<form hx-put="/loadgen" hx-target="#loadgen" hx-swap="innerHTML" class="form">
+  <input type="hidden" name="enabled_present" value="1">
+  <input type="hidden" name="keepalive_present" value="1">
+  <label class="toggle">
+    <input type="checkbox" name="enabled" value="1" {{if .Settings.Enabled}}checked{{end}}>
+    <span>Send traffic from this pod</span>
+  </label>
+  <div class="row">
+    <label>Rate
+      <select name="rps">
+        {{$cur := .Settings.RPS}}{{range .RPSOptions}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}} req/s</option>{{end}}
+        {{$known := false}}{{range .RPSOptions}}{{if eq . $cur}}{{$known = true}}{{end}}{{end}}
+        {{if not $known}}<option value="{{$cur}}" selected>{{$cur}} req/s</option>{{end}}
+      </select>
+    </label>
+    <label class="toggle small">
+      <input type="checkbox" name="keepalive" value="1" {{if .Settings.KeepAlive}}checked{{end}}>
+      <span>Keep-alive connections</span>
+    </label>
+  </div>
+  <label>Target <span class="muted">(the Service, so requests cross the real split)</span>
+    <input type="text" name="target" value="{{.Settings.Target}}" spellcheck="false">
+  </label>
+  <label>Expected split <span class="muted">(what your controller claims, e.g. v1=90,v2=10)</span>
+    <input type="text" name="expected" value="{{.Expected}}" placeholder="v1=90,v2=10" spellcheck="false">
+  </label>
+  <div class="actions">
+    <button type="submit" class="primary">Update traffic</button>
+    {{if .Flash}}<output role="status" class="flash {{.FlashKind}}">{{.Flash}}</output>{{end}}
+  </div>
+  <p class="note">Keep-alive on means each connection sticks to one pod, which is how a "90/10" split quietly becomes 100/0 for a chatty client. Turn it on to see that happen.</p>
+</form>
+{{end}}
+
+{{/* ---------- control: the chaos panel ---------- */}}
+{{define "control"}}
+<form hx-put="/control" hx-target="#control" hx-swap="innerHTML" class="form">
+  <input type="hidden" name="ready_present" value="1">
+  <label>Apply to
+    <select name="target_version">
+      <option value="" {{if eq .Target ""}}selected{{end}}>every version</option>
+      {{$t := .Target}}{{range .Versions}}<option value="{{.}}" {{if eq . $t}}selected{{end}}>{{.}} only</option>{{end}}
+    </select>
+  </label>
+  {{if not .Peers}}<p class="note">Only this pod will change. Set <code>CONTROL_PEERS</code> to the headless Service so every pod of the chosen version follows.</p>{{end}}
+
+  <fieldset class="scenarios">
+    <legend>Scenario</legend>
+    {{$active := .Settings.Scenario}}
+    {{range .Scenarios}}<button type="submit" name="scenario" value="{{.}}" class="chip {{if eq . $active}}active{{end}}">{{.}}</button>{{end}}
+  </fieldset>
+
+  <fieldset class="sliders">
+    <legend>Or dial it in</legend>
+    <label>Error rate <output>{{.ErrorPct}}%</output>
+      <input type="range" name="error_pct" min="0" max="100" step="5" value="{{.ErrorPct}}" oninput="this.previousElementSibling.value=this.value+'%'">
+    </label>
+    <label>Latency <output>{{.Settings.LatencyMs}} ms</output>
+      <input type="range" name="latency_ms" min="0" max="5000" step="50" value="{{.Settings.LatencyMs}}" oninput="this.previousElementSibling.value=this.value+' ms'">
+    </label>
+    <label>Jitter <output>{{.Settings.JitterMs}} ms</output>
+      <input type="range" name="jitter_ms" min="0" max="2000" step="50" value="{{.Settings.JitterMs}}" oninput="this.previousElementSibling.value=this.value+' ms'">
+    </label>
+    <label>CPU burn per request <output>{{.Settings.CPUBurnMs}} ms</output>
+      <input type="range" name="cpu_burn_ms" min="0" max="500" step="10" value="{{.Settings.CPUBurnMs}}" oninput="this.previousElementSibling.value=this.value+' ms'">
+    </label>
+    <label>Memory held <output>{{.Settings.MemHoldMB}} MB</output>
+      <input type="range" name="mem_hold_mb" min="0" max="1024" step="32" value="{{.Settings.MemHoldMB}}" oninput="this.previousElementSibling.value=this.value+' MB'">
+    </label>
+    <label class="toggle small">
+      <input type="checkbox" name="ready" value="1" {{if .Settings.Ready}}checked{{end}}>
+      <span>Answer /readyz with 200</span>
+    </label>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit" class="primary">Apply</button>
+    {{if .Flash}}<output role="status" class="flash {{.FlashKind}}">{{.Flash}}</output>{{end}}
+  </div>
+  <p class="note">Showing the settings of <code>{{.Pod}}</code> ({{.Version}}). Current scenario: <b>{{.Settings.Scenario}}</b>.</p>
+</form>
+{{end}}
