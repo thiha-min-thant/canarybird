@@ -69,6 +69,51 @@ sum by (target_version) (rate(canarybird_loadgen_requests_total[1m]))
 
 Also exported: `canarybird_chaos_*` gauges (what is currently configured), `canarybird_ready`, `canarybird_build_info`, `canarybird_sse_clients`.
 
+## No browser? curl it
+
+Half of real clusters are private: you are on a jump host with `kubectl` and
+`curl`, and nothing opens `http://localhost:8080`. canarybird notices a curl
+(or wget) user agent and answers in text, in colour, so the terminal gets the
+same picture as the browser:
+
+```bash
+kubectl port-forward svc/canarybird 8080:80 &
+
+curl localhost:8080             # the dashboard: traffic, chaos, per-version split with bars
+curl -N localhost:8080/events   # the grid, live: one glyph per request, a split summary per row
+```
+
+```
+canarybird dev  pod canarybird-v1-7d9f4-x2kq8 · version v1 · up 5s
+traffic: 40 req/s → http://canarybird  expected: v1=75,v2=25
+this pod: healthy
+
+VERSION  SHARE                          OBSERVED EXPECTED  DELTA  ERRORS     P50     P95  PODS
+v1       ███████████████████████│░░░░░░    75.2%    75.0%   +0.2    0.0%    1 ms    2 ms     3
+v2       ███████░│░░░░░░░░░░░░░░░░░░░░░    24.8%    25.0%   -0.2   28.8%    2 ms    2 ms     1
+```
+
+```
+█✕███████████✕█████████✕███✕███✕███████✕██  v1 75%/75 · v2 25%/25 ✕34%
+█✕███████████████✕████████✕███✕█████████✕█  v1 75%/75 · v2 25%/25 ✕36%
+```
+
+In the grid, colour is the version that answered, `✕` is a 5xx or connection
+error and `▒` is slower than 500 ms; the yellow `│` in a bar is the expected
+share. `?cols=60` sets the row width, `?color=none` drops the ANSI codes (versions
+become their last letter: `1`, `2`; errors `x`). The control routes answer in
+one line too, so a whole rollout rehearsal fits in a shell:
+
+```bash
+curl -X PUT -d 'enabled=1&rps=50&target=http://canarybird&expected=v1=90,v2=10' localhost:8080/loadgen
+curl -X PUT -d 'scenario=error-spike&target_version=v2' localhost:8080/control
+curl -X POST localhost:8080/stats/reset
+```
+
+Programs are unaffected: `Accept: application/json` (or `?format=json`) keeps the
+JSON, browsers and htmx keep HTML and SSE, and `?format=text` or `Accept: text/plain`
+forces text from any client.
+
 ## Run it with your rollout controller
 
 Each example is a complete manifest with a comment block on how to trigger a rollout and make it fail:
@@ -106,18 +151,18 @@ helm upgrade canarybird charts/canarybird --reuse-values --set version=v2 --set 
 
 | Route | |
 |---|---|
-| `GET /` | the UI |
+| `GET /` | the UI; text dashboard for curl/wget or `?format=text` |
 | `GET /api/hit` | the endpoint traffic is sent to; honours the chaos profile; returns identity JSON + `X-Canarybird-Version/Color/Pod` headers |
 | `GET /api/version` | identity, no chaos |
-| `GET /api/state` | everything: identity, chaos, loadgen, observed split |
+| `GET /api/state` | everything: identity, chaos, loadgen, observed split; text table for curl/wget or `?format=text` |
 | `PUT /control` | form or `Accept: application/json`; fields `scenario`, `target_version`, `error_pct`, `latency_ms`, `jitter_ms`, `cpu_burn_ms`, `mem_hold_mb`, `ready`, `panic_every` |
 | `PUT /loadgen` | `enabled`, `rps`, `keepalive`, `target`, `expected` (e.g. `v1=90,v2=10`) |
-| `GET /events` | SSE: `hello`, `hit` (JSON per request), `stats` and `control` (HTML fragments for htmx) |
+| `GET /events` | SSE: `hello`, `hit` (JSON per request), `stats` and `control` (HTML fragments for htmx); for curl `-N` a live text grid, `?cols=`, `?color=none` |
 | `GET /metrics`, `/healthz`, `/readyz` | |
 
 ```bash
-# break every v2 pod from the CLI
-curl -X PUT -H 'Accept: application/json' -d 'scenario=error-spike&target_version=v2' http://localhost:8080/control
+# break every v2 pod from the CLI (add -H 'Accept: application/json' for a machine-readable answer)
+curl -X PUT -d 'scenario=error-spike&target_version=v2' http://localhost:8080/control
 ```
 
 ## How it's built

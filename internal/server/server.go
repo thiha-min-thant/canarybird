@@ -200,8 +200,12 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("ready\n"))
 }
 
-func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	rows, total, secs := s.stats.Snapshot()
+	if wantsText(r) {
+		s.writeStateText(w, r)
+		return
+	}
 	writeJSON(w, map[string]any{
 		"identity": s.id, "chaos": s.chaos.Get(), "loadgen": s.loadgen.Get(),
 		"stats":          map[string]any{"versions": rows, "window_hits": total, "window_seconds": secs, "expected": s.stats.Expected()},
@@ -220,7 +224,11 @@ type pageView struct {
 	Peers    bool
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if wantsText(r) { // `curl canarybird` on a jump host: the dashboard as text
+		s.writeStateText(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	s.identityHeaders(w)
 	v := pageView{
@@ -245,6 +253,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	if wantsText(r) { // `curl -N canarybird/events`: the grid, one glyph per request
+		s.streamHitsText(w, r, flusher)
 		return
 	}
 	h := w.Header()
@@ -312,8 +324,13 @@ func (s *Server) statsView() statsView {
 	return statsView{Rows: rows, Total: total, WindowSecs: secs, Expected: s.stats.Expected(), Enabled: s.loadgen.Get().Enabled, Pod: s.id.Pod}
 }
 
-func (s *Server) handleStatsReset(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStatsReset(w http.ResponseWriter, r *http.Request) {
 	s.stats.Reset()
+	if wantsText(r) {
+		textHeaders(w)
+		fmt.Fprintln(w, "window reset")
+		return
+	}
 	w.Write(s.render("stats", s.statsView()))
 }
 
@@ -331,7 +348,12 @@ func (s *Server) loadgenView(flash, kind string) loadgenView {
 	return loadgenView{Settings: s.loadgen.Get(), Expected: s.stats.Expected(), Flash: flash, FlashKind: kind, RPSOptions: []int{5, 10, 20, 50, 100, 200}}
 }
 
-func (s *Server) handleLoadgenGet(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleLoadgenGet(w http.ResponseWriter, r *http.Request) {
+	if wantsText(r) {
+		textHeaders(w)
+		fmt.Fprintln(w, trafficLine(s.loadgen.Get(), s.stats.Expected()))
+		return
+	}
 	w.Write(s.render("loadgen", s.loadgenView("", "")))
 }
 
@@ -361,6 +383,11 @@ func (s *Server) handleLoadgenSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if wantsJSON(r) {
 		writeJSON(w, applied)
+		return
+	}
+	if wantsText(r) {
+		textHeaders(w)
+		fmt.Fprintln(w, msg)
 		return
 	}
 	w.Write(s.render("loadgen", s.loadgenView(msg, "ok")))
@@ -397,7 +424,12 @@ func (s *Server) controlView(flash, kind string) controlView {
 	}
 }
 
-func (s *Server) handleControlGet(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleControlGet(w http.ResponseWriter, r *http.Request) {
+	if wantsText(r) {
+		textHeaders(w)
+		fmt.Fprintln(w, chaosLine(s.chaos.Get()))
+		return
+	}
 	w.Write(s.render("control", s.controlView("", "")))
 }
 
@@ -435,6 +467,11 @@ func (s *Server) handleControlSet(w http.ResponseWriter, r *http.Request) {
 		if !res.Applied {
 			msg = fmt.Sprintf("This pod is %s, not %s — nothing changed. Set CONTROL_PEERS to reach other pods.", s.id.Version, target)
 			kind = "warn"
+		}
+		if wantsText(r) {
+			textHeaders(w)
+			fmt.Fprintln(w, msg)
+			return
 		}
 		w.Write(s.render("control", s.controlView(msg, kind)))
 		return
@@ -475,6 +512,11 @@ func (s *Server) handleControlSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if errs > 0 {
 		msg += fmt.Sprintf(" %d pod(s) unreachable.", errs)
+	}
+	if wantsText(r) {
+		textHeaders(w)
+		fmt.Fprintln(w, msg)
+		return
 	}
 	w.Write(s.render("control", s.controlView(msg, kind)))
 }
@@ -588,6 +630,31 @@ func mustJSON(v any) []byte {
 
 func wantsJSON(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "application/json") && r.Header.Get("HX-Request") == ""
+}
+
+// wantsText decides when a response is for a terminal rather than a browser
+// or a program. curl and wget get text by default, so that on a jump host
+// `curl canarybird` just works; ?format=json or Accept: application/json
+// gets the machine form back. htmx requests are never text.
+func wantsText(r *http.Request) bool {
+	if r.Header.Get("HX-Request") != "" {
+		return false
+	}
+	switch r.URL.Query().Get("format") {
+	case "text", "txt", "plain":
+		return true
+	case "json", "html", "sse":
+		return false
+	}
+	accept := r.Header.Get("Accept")
+	if strings.HasPrefix(accept, "text/plain") {
+		return true
+	}
+	if strings.Contains(accept, "json") || strings.Contains(accept, "html") || strings.Contains(accept, "event-stream") {
+		return false
+	}
+	ua := r.Header.Get("User-Agent")
+	return strings.HasPrefix(ua, "curl/") || strings.HasPrefix(ua, "Wget/")
 }
 
 func formBool(r *http.Request, key string, def bool) bool {

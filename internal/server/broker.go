@@ -8,11 +8,39 @@ import (
 // Broker fans out server-sent events to every connected browser.
 // Slow subscribers drop frames rather than stall the loadgen.
 type Broker struct {
-	mu   sync.Mutex
-	subs map[chan []byte]struct{}
+	mu      sync.Mutex
+	subs    map[chan []byte]struct{}
+	hitSubs map[chan Hit]struct{} // terminal clients (curl) want hits, not SSE frames
 }
 
-func NewBroker() *Broker { return &Broker{subs: map[chan []byte]struct{}{}} }
+func NewBroker() *Broker {
+	return &Broker{subs: map[chan []byte]struct{}{}, hitSubs: map[chan Hit]struct{}{}}
+}
+
+// SubscribeHits delivers every load-generator hit as a value. Used by the
+// plain-text /events stream so curl can draw the grid.
+func (b *Broker) SubscribeHits() (ch chan Hit, cancel func()) {
+	ch = make(chan Hit, 256)
+	b.mu.Lock()
+	b.hitSubs[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch, func() {
+		b.mu.Lock()
+		delete(b.hitSubs, ch)
+		b.mu.Unlock()
+	}
+}
+
+func (b *Broker) PublishHit(h Hit) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for ch := range b.hitSubs {
+		select {
+		case ch <- h:
+		default:
+		}
+	}
+}
 
 func (b *Broker) Subscribe() (ch chan []byte, cancel func()) {
 	ch = make(chan []byte, 256)

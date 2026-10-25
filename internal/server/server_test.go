@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -160,5 +162,138 @@ func TestSSEStreamsHello(t *testing.T) {
 	n, _ := resp.Body.Read(buf)
 	if !strings.Contains(string(buf[:n]), "event: hello") {
 		t.Fatalf("first frame: %q", buf[:n])
+	}
+}
+
+func TestCurlGetsText(t *testing.T) {
+	s := newTestServer(t)
+	s.stats.SetExpected("v1=90,v2=10")
+	s.stats.Record(Hit{TS: 1000, Version: "v1", Color: "#4C8DFF", Pod: "a", Status: 200, LatencyMs: 2})
+	s.stats.Record(Hit{TS: 2000, Version: "v2", Color: "#3DD68C", Pod: "b", Status: 500, LatencyMs: 900})
+	cases := []struct {
+		name, path string
+		headers    []string
+	}{
+		{"curl user agent", "/api/state", []string{"User-Agent", "curl/8.7.1"}},
+		{"curl on index", "/", []string{"User-Agent", "curl/8.7.1"}},
+		{"accept text", "/api/state", []string{"Accept", "text/plain"}},
+		{"format=text", "/api/state?format=text&color=none", nil},
+	}
+	for _, c := range cases {
+		rr := do(s, "GET", c.path, "", c.headers...)
+		if rr.Code != 200 || !strings.HasPrefix(rr.Header().Get("Content-Type"), "text/plain") {
+			t.Fatalf("%s: %d %s", c.name, rr.Code, rr.Header().Get("Content-Type"))
+		}
+		body := rr.Body.String()
+		for _, want := range []string{"pod test-pod", "expected: v1=90,v2=10", "VERSION", "v1", "50.0%", "90.0%", "-40.0", "100.0%", "last 2 requests", "█", "│"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: missing %q in\n%s", c.name, want, body)
+			}
+		}
+		if colour := strings.Contains(body, "\x1b["); colour == strings.Contains(c.path, "color=none") {
+			t.Errorf("%s: colour=%v", c.name, colour)
+		}
+	}
+	// Programs and browsers are untouched.
+	notText := []struct {
+		path    string
+		headers []string
+		ctype   string
+	}{
+		{"/api/state", nil, "application/json"},
+		{"/api/state", []string{"User-Agent", "curl/8.7.1", "Accept", "application/json"}, "application/json"},
+		{"/api/state?format=json", []string{"User-Agent", "curl/8.7.1"}, "application/json"},
+		{"/", nil, "text/html"},
+		{"/", []string{"User-Agent", "curl/8.7.1", "Accept", "text/html"}, "text/html"},
+	}
+	for _, c := range notText {
+		rr := do(s, "GET", c.path, "", c.headers...)
+		if got := rr.Header().Get("Content-Type"); !strings.HasPrefix(got, c.ctype) {
+			t.Errorf("%s %v: content-type %q, want %s", c.path, c.headers, got, c.ctype)
+		}
+	}
+	// htmx polling from a browser whose UA is spoofed as curl still gets its fragment.
+	if rr := do(s, "GET", "/control", "", "User-Agent", "curl/8.7.1", "HX-Request", "true"); !strings.HasPrefix(strings.TrimSpace(rr.Body.String()), "<form") {
+		t.Errorf("htmx fragment: %q", rr.Body.String()[:40])
+	}
+	// Control routes answer in one line.
+	rr := do(s, "PUT", "/control", "scenario=error-spike", "User-Agent", "curl/8.7.1")
+	if body := rr.Body.String(); !strings.HasPrefix(body, "Applied error-spike to this pod") {
+		t.Errorf("control text: %q", body)
+	}
+	rr = do(s, "PUT", "/loadgen", "enabled=1&rps=50", "User-Agent", "curl/8.7.1")
+	if body := rr.Body.String(); !strings.HasPrefix(body, "Sending 50 req/s") {
+		t.Errorf("loadgen text: %q", body)
+	}
+	rr = do(s, "GET", "/control", "", "User-Agent", "curl/8.7.1")
+	if body := rr.Body.String(); !strings.HasPrefix(body, "this pod: error-spike (50% 500 errors)") {
+		t.Errorf("control get text: %q", body)
+	}
+	rr = do(s, "POST", "/stats/reset", "", "User-Agent", "curl/8.7.1")
+	if rr.Body.String() != "window reset\n" {
+		t.Errorf("reset text: %q", rr.Body.String())
+	}
+}
+
+func TestEventsTextStream(t *testing.T) {
+	s := newTestServer(t)
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/events?cols=4&color=none", nil)
+	req.Header.Set("User-Agent", "curl/8.7.1")
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content-type %s", ct)
+	}
+
+	var mu sync.Mutex
+	var got strings.Builder
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := resp.Body.Read(buf)
+			mu.Lock()
+			got.Write(buf[:n])
+			mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	// ok, fail, fail, slow — one row at cols=4. The stats are recorded once
+	// (so the summary is stable at 50/50 with v2 all errors) and the hits are
+	// re-published until the subscriber has seen a whole row.
+	hits := []Hit{{Version: "v1", Status: 200, LatencyMs: 1}, {Version: "v2", Status: 500}, {Version: "v2", Err: "timeout"}, {Version: "v1", Status: 200, LatencyMs: 900}}
+	for _, h := range hits {
+		s.stats.Record(h)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		for _, h := range hits {
+			s.broker.PublishHit(h)
+		}
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		out := got.String()
+		mu.Unlock()
+		if strings.Contains(out, "v2 50%") || time.Now().After(deadline) {
+			break
+		}
+	}
+	mu.Lock()
+	out := got.String()
+	mu.Unlock()
+	if !strings.Contains(out, "traffic is off") {
+		t.Errorf("missing hint when traffic is off:\n%s", out)
+	}
+	if !strings.Contains(out, "1xx1") {
+		t.Errorf("row glyphs: want ok, fail, fail, slow as 1xx1 in\n%s", out)
+	}
+	if !strings.Contains(out, "v1 50%") || !strings.Contains(out, "v2 50% ✕100%") {
+		t.Errorf("row summary:\n%s", out)
 	}
 }

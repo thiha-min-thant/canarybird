@@ -160,6 +160,7 @@ func (l *Loadgen) one(ctx context.Context) {
 	}
 	l.stats.Record(hit)
 	l.metrics.ObserveClient(hit)
+	l.broker.PublishHit(hit)
 	if b, err := json.Marshal(hit); err == nil {
 		l.broker.Publish("hit", b)
 	}
